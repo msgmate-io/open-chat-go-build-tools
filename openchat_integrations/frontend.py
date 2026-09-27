@@ -125,8 +125,10 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
                     f'import "../pages/integrations/{front.name}/{extension}";'
                 )
 
-    if linked_extensions:
-        write_extensions_entry(frontend_root, linked_extensions)
+    # Always rewrite the extensions entry: profiles without chat extensions
+    # must reset the committed baseline to empty, otherwise a previously linked
+    # private page set would leave dangling imports.
+    write_extensions_entry(frontend_root, linked_extensions)
 
     if packages_linked:
         _ensure_frontend_workspace(frontend_root, log)
