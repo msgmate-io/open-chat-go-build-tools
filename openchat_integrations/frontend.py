@@ -116,6 +116,7 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
         if src_pages.exists():
             _replace_symlink(src_pages, pages_root / front.name)
             pages_linked += 1
+            _anchor_node_modules(src, frontend_root)
 
     if packages_linked:
         _ensure_frontend_workspace(frontend_root, log)
@@ -125,6 +126,28 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
             f"and {packages_linked} package(s)"
         )
     return pages_linked + packages_linked
+
+
+def _anchor_node_modules(src: Path, frontend_root: Path) -> None:
+    """Point the linked page set's `frontend/node_modules` at the aggregator.
+
+    Vite (rolldown) resolves bare imports from the symlink target's real
+    location, which is outside the aggregator's node_modules tree. A
+    localizing symlink keeps dev-mode and image builds working; the
+    integration repos gitignore `frontend/node_modules`. Idempotent.
+    """
+    node_modules = src / "node_modules"
+    rel = os.path.relpath(frontend_root / "node_modules", start=src)
+    if node_modules.is_symlink() or node_modules.exists():
+        if node_modules.is_symlink() and node_modules.readlink() == Path(rel):
+            return
+        if not node_modules.is_symlink():
+            # A real node_modules in the integration checkout wins.
+            return
+    try:
+        node_modules.symlink_to(rel)
+    except OSError:
+        log(f"warning: could not create node_modules anchor at {src}")
 
 
 def _pages_from_integration_json(path: Path) -> List[FrontendPage]:
