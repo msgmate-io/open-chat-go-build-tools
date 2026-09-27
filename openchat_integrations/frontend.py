@@ -80,6 +80,8 @@ def effective_frontend(manifest: Manifest, integ: Integration) -> Optional[Front
         )
     return integ.frontend
 
+
+def link(manifest: Manifest, selected: List[str], log) -> int:
     """Link integration-owned Vike frontend pages/packages into the aggregator.
 
     Integration pages live in the (possibly private) integration repositories
