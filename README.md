@@ -61,6 +61,23 @@ Select a profile with `INTEGRATION_PROFILE`, `--profile`, or the manifest's
 
 - `sync --frozen` checks out the commits pinned in `integrations.lock.json`
   instead of the manifest `ref`. CI and release builds use `--frozen`.
+- Frontend page sets live in the integration repositories: each integration
+  checkout ships `frontend/pages` and an `integration.frontend.json`
+  describing its prerendered pages:
+
+  ```json
+  {
+    "pages": [
+      { "source": "integrations/mcp/servers", "asset": "servers/index.html" }
+    ]
+  }
+  ```
+
+  `source` is the prerendered route directory relative to the client dist
+  root; `asset` is the destination inside the integration's embedded
+  `frontend_assets`. The public parent manifest only lists the publish name
+  (`frontend: {name: ...}`), so closed-source integrations never leak their
+  page paths.
 - `resolve` regenerates `backend/go.work`,
   `backend/integrations/externalintegrations/imports_gen.go` and the build tags.
 - `dev` writes a local override to the gitignored `integrations.local.yaml`;
