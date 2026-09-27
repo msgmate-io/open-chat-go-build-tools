@@ -8,7 +8,9 @@ which reads `integrations.yaml` from the Open-Chat repository root and:
 - generates the Go workspace (`backend/go.work`), the side-effect imports and
   the build tags for the selected profile,
 - links integration-owned Vike frontend packages and exports their prerendered
-  pages into the integrations' embedded `frontend_assets`.
+  pages into the integrations' embedded `frontend_assets`,
+- materializes profile-scoped private repositories and symlinks (`profile
+  setup`) so the public repository stays free of private source.
 
 ## Install
 
@@ -37,22 +39,40 @@ Run from the Open-Chat repository root (or pass `--repo-root`):
 
 ```bash
 openchat-integrations list    --profile core-only
-openchat-integrations sync    --profile core-only   # fetch checkouts + write lock
-openchat-integrations resolve --profile core-only   # go.work + imports_gen + tags
-openchat-integrations frontend --profile core-only  # link integration Vike packages/pages
-openchat-integrations export  --profile core-only --dist-dir frontend/dist/client
-openchat-integrations prepare --profile core-only   # sync + resolve + frontend
-openchat-integrations check   --profile core-only   # validate lock + checkouts + pages
+openchat-integrations setup   --profile full        # repos + symlinks + private manifest
+openchat-integrations sync    --profile full        # fetch checkouts + write lock
+openchat-integrations resolve --profile full        # go.work + imports_gen + tags
+openchat-integrations frontend --profile full       # link integration Vike packages/pages
+openchat-integrations export  --profile full --dist-dir frontend/dist/client
+openchat-integrations prepare --profile full        # sync + resolve + frontend
+openchat-integrations check   --profile full        # validate lock + checkouts + pages
 openchat-integrations dev --integration git --path ../my-git-integration-fork
 ```
 
-## Profiles
+Every command triggers `setup` automatically when the profile's marker is
+missing or stale; `--no-setup` skips it and `setup --force-setup` re-runs it.
 
-| Profile | Default? | Integrations (plus transitive `depends_on`) |
+## Profiles and profile setup
+
+Public profiles live in `integrations.yaml`; private integrations and the
+private profiles live in a private manifest fragment inside the private `ci`
+repository. `profile_setup.yaml` declares, per profile, the extra repositories
+and symlinks that `setup` materializes:
+
+| Profile | Integrations | Extra repos |
 | --- | --- | --- |
-| `core-only` | yes | `mcp`, `rest_api_tool`, `go_client` |
-| `default` | | core + `matrix`, `docker_sandbox`, `git`, `kubernetes` |
-| `full` | | every integration (includes private ones) |
+| `core-only` | public core | – |
+| `default` | core + selected private | private manifest fragment (sparse) |
+| `full` | every integration | private manifest fragment (sparse) |
+| `full-ci` | every integration | full private CI tooling + Helm chart |
+| `full-android` | every integration | private manifest fragment + mobile client |
+
+- The private fragment (`integrations.private.yaml`) and its lockfile are read
+  from a sparse checkout of `openchat/` in the `ci` repository and mirrored into
+  `.integrations/private/` (gitignored). The public `integrations.lock.json`
+  never contains private pins.
+- A single extra repo can be materialized without a profile:
+  `openchat-integrations setup --repo llm_coding_agents`.
 
 Select a profile with `INTEGRATION_PROFILE`, `--profile`, or the manifest's
 `default_profile`.
