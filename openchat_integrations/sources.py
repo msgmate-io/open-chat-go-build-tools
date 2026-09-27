@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 from .manifest import Integration, Manifest
 
@@ -51,7 +51,20 @@ class Lockfile:
                 for integ_id, entry in sorted(self.integrations.items())
             },
         }
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def load_lockfiles(paths: Iterable[Optional[Path]]) -> "Lockfile":
+    """Merge the public lockfile with the (optional) private lock fragment."""
+    merged = Lockfile()
+    for path in paths:
+        if path is None:
+            continue
+        part = Lockfile.load(Path(path))
+        merged.integrations.update(part.integrations)
+        merged.version = max(merged.version, part.version)
+    return merged
 
 
 def _run_git(args, cwd: Optional[Path] = None) -> str:

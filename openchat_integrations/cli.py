@@ -18,9 +18,10 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from . import frontend, gowork, sources
+from . import frontend, gowork, setup, sources
 from .manifest import Manifest, ManifestError, MANIFEST_NAME, LOCAL_OVERLAY_NAME
-from .sources import Lockfile, SourceError
+from .sources import Lockfile, SourceError, load_lockfiles
+from .setup import SetupError
 
 LOCKFILE_NAME = "integrations.lock.json"
 
@@ -37,13 +38,52 @@ def find_repo_root(start: Optional[Path]) -> Path:
     raise ManifestError(f"could not find {MANIFEST_NAME} above {current}")
 
 
+def _repo_root(args) -> Path:
+    return find_repo_root(Path(args.repo_root) if args.repo_root else None)
+
+
+def _ensure_setup(args) -> Path:
+    """Materialize the profile setup before any command that needs it."""
+    repo_root = _repo_root(args)
+    if getattr(args, "no_setup", False):
+        return repo_root
+    profile = setup.resolve_profile(repo_root, getattr(args, "profile", None))
+    setup.ensure(
+        repo_root,
+        profile,
+        force=getattr(args, "force_setup", False),
+        update=getattr(args, "update", False),
+        log=log,
+    )
+    return repo_root
+
+
+def _lock(args, repo_root: Path) -> tuple:
+    public = repo_root / LOCKFILE_NAME
+    private = setup.private_lock_path(repo_root)
+    return load_lockfiles([public, private]), public, private
+
+
 def _load(args) -> Manifest:
-    repo_root = find_repo_root(Path(args.repo_root) if args.repo_root else None)
+    repo_root = _ensure_setup(args)
     return Manifest.load(repo_root, apply_local_overlay=True)
 
 
 def _profile(args, manifest: Manifest) -> str:
     return manifest.resolve_profile(getattr(args, "profile", None))
+
+
+def cmd_setup(args) -> int:
+    repo_root = _repo_root(args)
+    profile = setup.resolve_profile(repo_root, getattr(args, "profile", None))
+    setup.ensure(
+        repo_root,
+        profile,
+        force=getattr(args, "force_setup", False) or getattr(args, "force", False),
+        update=getattr(args, "update", False),
+        log=log,
+    )
+    return 0
 
 
 def cmd_sync(args) -> int:
@@ -52,8 +92,7 @@ def cmd_sync(args) -> int:
     selected = manifest.profile_ids(profile)
     closure = manifest.closure(selected)
 
-    lock_path = manifest.repo_root / LOCKFILE_NAME
-    lock = Lockfile.load(lock_path)
+    lock, lock_path, private_lock_path = _lock(args, manifest.repo_root)
 
     log(f"sync: profile={profile} selected={','.join(selected)}")
     for integ_id in closure:
@@ -75,8 +114,28 @@ def cmd_sync(args) -> int:
         if integ_id not in manifest.integrations:
             del lock.integrations[integ_id]
 
-    lock.save(lock_path)
+    # Never write private pins into the public lockfile.
+    public_entries = {}
+    private_entries = {}
+    for integ_id, entry in lock.integrations.items():
+        integ = manifest.integrations.get(integ_id)
+        if integ is not None and integ.private:
+            private_entries[integ_id] = entry
+        else:
+            public_entries[integ_id] = entry
+
+    Lockfile(version=lock.version, integrations=public_entries).save(lock_path)
     log(f"sync: wrote {lock_path.relative_to(manifest.repo_root)}")
+
+    if private_entries:
+        if not private_lock_path.parent.exists():
+            raise SetupError(
+                "private integrations are selected but the private ci checkout "
+                f"is missing at {private_lock_path.parent}; run `setup --profile "
+                f"{profile}` first"
+            )
+        Lockfile(version=lock.version, integrations=private_entries).save(private_lock_path)
+        log(f"sync: wrote {private_lock_path.relative_to(manifest.repo_root)}")
     return 0
 
 
@@ -125,8 +184,7 @@ def cmd_check(args) -> int:
     profile = _profile(args, manifest)
     plan = gowork.build_plan(manifest, profile)
 
-    lock_path = manifest.repo_root / LOCKFILE_NAME
-    lock = Lockfile.load(lock_path)
+    lock, lock_path, private_lock_path = _lock(args, manifest.repo_root)
     problems: List[str] = []
     for integ_id in plan["closure"]:
         integ = manifest.integrations[integ_id]
@@ -206,12 +264,25 @@ def build_parser() -> argparse.ArgumentParser:
     def add_common(p):
         p.add_argument("--profile", help="integration profile (defaults to INTEGRATION_PROFILE or manifest default)")
         p.add_argument("--repo-root", help=argparse.SUPPRESS)
+        p.add_argument(
+            "--no-setup",
+            action="store_true",
+            help="skip the automatic profile setup (repos/symlinks)",
+        )
 
     for name in ("sync", "prepare"):
         p = sub.add_parser(name, help="materialize integration checkouts")
         add_common(p)
         p.add_argument("--frozen", action="store_true", help="use integrations.lock.json commits")
         p.add_argument("--update", action="store_true", help="update existing checkouts to ref")
+        if name == "prepare":
+            p.add_argument("--force-setup", action="store_true", help="re-run the profile setup")
+
+    p = sub.add_parser("setup", help="materialize the profile's repos and symlinks")
+    add_common(p)
+    p.add_argument("--update", action="store_true", help="update existing checkouts to ref")
+    p.add_argument("--force-setup", action="store_true", help="re-run even if the marker matches")
+    p.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
 
     p = sub.add_parser("resolve", help="generate go.work, imports_gen.go and the effective plan")
     add_common(p)
@@ -242,6 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     handlers = {
+        "setup": cmd_setup,
         "sync": cmd_sync,
         "prepare": cmd_prepare,
         "resolve": cmd_resolve,
@@ -253,7 +325,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     }
     try:
         return handlers[args.command](args)
-    except (ManifestError, SourceError, gowork.ResolveError, frontend.ExportError) as exc:
+    except (ManifestError, SourceError, SetupError, gowork.ResolveError, frontend.ExportError) as exc:
         log(f"error: {exc}")
         return 2
 

@@ -56,7 +56,24 @@ yaml = _ensure_yaml()
 MANIFEST_NAME = "integrations.yaml"
 LOCAL_OVERLAY_NAME = "integrations.local.yaml"
 
+# Private manifest fragment and lockfile checked into the private `ci`
+# repository. They are merged only once `profile setup` has materialized it.
+PRIVATE_MANIFEST_REL = Path("development") / "ci" / "openchat" / "integrations.private.yaml"
+PRIVATE_LOCK_REL = Path("development") / "ci" / "openchat" / "integrations.private.lock.json"
+
 VALID_SOURCES = ("git", "local", "submodule")
+
+
+def _deep_merge(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``extra`` into ``base`` (extra wins)."""
+    merged = dict(base)
+    for key, value in extra.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 class ManifestError(RuntimeError):
@@ -110,7 +127,12 @@ class Manifest:
     repo_root: Path
 
     @classmethod
-    def load(cls, repo_root: Path, apply_local_overlay: bool = True) -> "Manifest":
+    def load(
+        cls,
+        repo_root: Path,
+        apply_local_overlay: bool = True,
+        private_fragment: Optional[Path] = None,
+    ) -> "Manifest":
         repo_root = repo_root.resolve()
         manifest_path = repo_root / MANIFEST_NAME
         if not manifest_path.exists():
@@ -119,6 +141,15 @@ class Manifest:
         raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         if not isinstance(raw, dict):
             raise ManifestError("manifest root must be a mapping")
+
+        # Merge the private fragment (private integrations + profiles) when the
+        # owning checkout is present. It is a no-op for public-only profiles.
+        fragment_path = private_fragment or (repo_root / PRIVATE_MANIFEST_REL)
+        if fragment_path.exists():
+            fragment = yaml.safe_load(fragment_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(fragment, dict):
+                raise ManifestError(f"private manifest {fragment_path} must be a mapping")
+            raw = _deep_merge(raw, fragment)
 
         overlay: Dict[str, Any] = {}
         overlay_path = repo_root / LOCAL_OVERLAY_NAME
