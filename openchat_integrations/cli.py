@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -45,7 +46,7 @@ def _repo_root(args) -> Path:
 def _ensure_setup(args) -> Path:
     """Materialize the profile setup before any command that needs it."""
     repo_root = _repo_root(args)
-    if getattr(args, "no_setup", False):
+    if getattr(args, "no_setup", False) or os.environ.get("OPENCHAT_NO_SETUP") == "1":
         return repo_root
     profile = setup.resolve_profile(repo_root, getattr(args, "profile", None))
     setup.ensure(
