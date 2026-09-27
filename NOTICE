@@ -1,0 +1,42 @@
+NOTICE
+
+This repository is licensed under the GNU Affero General Public License,
+version 3.0 or (at your option) any later version (AGPL-3.0-or-later).
+See LICENSE for the full license text.
+
+The licensing of this project is currently being drafted. The statements
+below describe the intended terms and may change.
+
+Intellectual property
+  All original source code in this repository is the intellectual property
+  of Tim Schupp / Tim Benjamin Software, unless otherwise stated.
+
+Copyright owner exemption
+  Tim Schupp / Tim Benjamin Software is the sole copyright owner and
+  intellectual property holder of the OpenChat project and of this
+  repository. As the copyright owner, Tim Schupp / Tim Benjamin Software is
+  not bound by the terms of the AGPL-3.0-or-later grant that it makes to the
+  public. It therefore reserves the right to use, combine, link, distribute,
+  and keep private its own proprietary components without being subject to
+  the source-disclosure obligations of AGPLv3, including Section 13 (Remote
+  Network Interaction).
+
+  This exemption is personal to Tim Schupp / Tim Benjamin Software and does
+  NOT extend to any third party. Third parties who receive this software
+  under AGPL-3.0-or-later remain fully bound by AGPLv3. In particular, third
+  parties may not reproduce, distribute, or operate builds that combine this
+  software with the proprietary OpenChat components referenced below.
+
+Proprietary components excluded from the public grant
+  The proprietary OpenChat components that this repository may be combined
+  with at build or run time are NOT licensed under AGPL-3.0-or-later and are
+  explicitly excluded from the public grant in this repository. These
+  components are published, where at all, as private repositories under
+  https://github.com/msgmate-io and are not part of this repository.
+
+Special licensing
+  AGPL-3.0-or-later may not fit every use case. Alternative, special, or
+  commercial licensing can be investigated and provided on request.
+  Contact: tim+licensing@timschupp.de
+
+Third-party dependencies remain under their own respective licenses.

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openchat-integrations"
+version = "0.1.0"
+description = "Open-Chat integration manager: fetch integration sources, generate the Go workspace and export integration frontend pages."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Tim Schupp / Tim Benjamin Software" }]
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+openchat-integrations = "openchat_integrations.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/msgmate-io/open-chat-go-build-tools"
+
+[tool.setuptools]
+packages = ["openchat_integrations"]
