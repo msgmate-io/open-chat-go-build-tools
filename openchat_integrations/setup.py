@@ -374,7 +374,8 @@ def ensure(
         marker = _read_marker(repo_root, profile)
         if marker and marker.get("digest") == digest:
             missing = [r for r in repos if not (repo_root / r.path).exists()]
-            if not missing:
+            fragment_ok = (not wants_fragment) or _find_fragment_source(repo_root) is not None
+            if not missing and fragment_ok:
                 if wants_fragment:
                     _mirror_fragment(repo_root, lambda _m: None)
                 return False
@@ -388,6 +389,17 @@ def ensure(
         resolved = _resolve_repo(repo_root, repo)
         commit = _ensure_repo(resolved, update=update, log=log)
         recorded.append({"id": repo.id, "path": repo.path, "commit": commit})
+
+    # A reused checkout (e.g. an old submodule working tree) may predate the
+    # private manifest fragment. Force-update the fragment repos so `openchat/`
+    # is present, otherwise private profiles cannot resolve.
+    if wants_fragment and _find_fragment_source(repo_root) is None:
+        for repo in repos:
+            if not repo.fragment:
+                continue
+            log(f"setup: fragment missing; updating {repo.id}")
+            resolved = _resolve_repo(repo_root, repo)
+            _ensure_repo(resolved, update=True, log=log)
 
     for link in profile_setup.symlinks:
         _apply_link(repo_root, link)
