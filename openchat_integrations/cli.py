@@ -102,8 +102,8 @@ def cmd_sync(args) -> int:
             manifest,
             integ,
             lock,
-            frozen=args.frozen,
-            update=args.update,
+            frozen=getattr(args, "frozen", False),
+            update=getattr(args, "update", False),
             log=log,
         )
         lock.integrations[integ_id] = entry
