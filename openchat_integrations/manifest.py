@@ -57,10 +57,14 @@ MANIFEST_NAME = "integrations.yaml"
 LOCAL_OVERLAY_NAME = "integrations.local.yaml"
 
 # Private manifest fragment and lockfile, mirrored from a `ci` checkout into a
-# stable gitignored location by `profile setup`. They are merged only when this
-# mirror is present (i.e. a private profile has been set up).
+# stable gitignored location by `profile setup`. When the mirror is absent (e.g.
+# inside a Docker build that only copied the ci checkout, not the mirror) the
+# fragment is read straight from the checkout.
 PRIVATE_MANIFEST_REL = Path(".integrations") / "private" / "integrations.private.yaml"
 PRIVATE_LOCK_REL = Path(".integrations") / "private" / "integrations.private.lock.json"
+CI_FRAGMENT_REL = Path("development") / "ci" / "openchat"
+CI_MANIFEST_REL = CI_FRAGMENT_REL / "integrations.private.yaml"
+CI_LOCK_REL = CI_FRAGMENT_REL / "integrations.private.lock.json"
 
 VALID_SOURCES = ("git", "local", "submodule")
 
@@ -144,13 +148,23 @@ class Manifest:
             raise ManifestError("manifest root must be a mapping")
 
         # Merge the private fragment (private integrations + profiles) when the
-        # owning checkout is present. It is a no-op for public-only profiles.
-        fragment_path = private_fragment or (repo_root / PRIVATE_MANIFEST_REL)
-        if fragment_path.exists():
+        # owning checkout (or its mirror) is present. It is a no-op for
+        # public-only profiles.
+        if private_fragment is not None:
+            candidates = [private_fragment]
+        else:
+            candidates = [
+                repo_root / PRIVATE_MANIFEST_REL,
+                repo_root / CI_MANIFEST_REL,
+            ]
+        for fragment_path in candidates:
+            if not fragment_path.exists():
+                continue
             fragment = yaml.safe_load(fragment_path.read_text(encoding="utf-8")) or {}
             if not isinstance(fragment, dict):
                 raise ManifestError(f"private manifest {fragment_path} must be a mapping")
             raw = _deep_merge(raw, fragment)
+            break
 
         overlay: Dict[str, Any] = {}
         overlay_path = repo_root / LOCAL_OVERLAY_NAME

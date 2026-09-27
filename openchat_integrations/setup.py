@@ -181,6 +181,15 @@ def private_lock_path(repo_root: Path) -> Path:
     return repo_root / PRIVATE_LOCK_REL
 
 
+def existing_private_lock(repo_root: Path) -> Optional[Path]:
+    """The private lockfile to read, preferring the mirror over the ci checkout."""
+    for rel in (PRIVATE_LOCK_REL, Path("development/ci/openchat/integrations.private.lock.json")):
+        candidate = repo_root / rel
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _run_git(args, cwd: Optional[Path] = None) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -203,10 +212,16 @@ def _rev_parse(path: Path) -> str:
 
 
 def _apply_sparse(path: Path, sparse: List[str]) -> None:
-    if not sparse:
+    if sparse:
+        _run_git(["sparse-checkout", "init", "--cone"], cwd=path)
+        _run_git(["sparse-checkout", "set", *sparse], cwd=path)
         return
-    _run_git(["sparse-checkout", "init", "--cone"], cwd=path)
-    _run_git(["sparse-checkout", "set", *sparse], cwd=path)
+    # Disable a previously applied sparse checkout so a full profile sees the
+    # complete repository (e.g. `ci` after `ci_fragment`).
+    try:
+        _run_git(["sparse-checkout", "disable"], cwd=path)
+    except SetupError:
+        pass
 
 
 def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
@@ -218,9 +233,9 @@ def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
             log(f"setup: fetch {repo.id} ({repo.path})")
             _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
             _run_git(["checkout", "--force", repo.ref], cwd=path)
-            _apply_sparse(path, repo.sparse)
         else:
             log(f"setup: using existing {repo.id} ({repo.path})")
+        _apply_sparse(path, repo.sparse)
         return _rev_parse(path)
 
     path.parent.mkdir(parents=True, exist_ok=True)

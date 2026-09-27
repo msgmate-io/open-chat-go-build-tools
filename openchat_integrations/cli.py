@@ -60,7 +60,7 @@ def _ensure_setup(args) -> Path:
 
 def _lock(args, repo_root: Path) -> tuple:
     public = repo_root / LOCKFILE_NAME
-    private = setup.private_lock_path(repo_root)
+    private = setup.existing_private_lock(repo_root) or setup.private_lock_path(repo_root)
     return load_lockfiles([public, private]), public, private
 
 
