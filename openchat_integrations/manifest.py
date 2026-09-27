@@ -56,10 +56,11 @@ yaml = _ensure_yaml()
 MANIFEST_NAME = "integrations.yaml"
 LOCAL_OVERLAY_NAME = "integrations.local.yaml"
 
-# Private manifest fragment and lockfile checked into the private `ci`
-# repository. They are merged only once `profile setup` has materialized it.
-PRIVATE_MANIFEST_REL = Path("development") / "ci" / "openchat" / "integrations.private.yaml"
-PRIVATE_LOCK_REL = Path("development") / "ci" / "openchat" / "integrations.private.lock.json"
+# Private manifest fragment and lockfile, mirrored from a `ci` checkout into a
+# stable gitignored location by `profile setup`. They are merged only when this
+# mirror is present (i.e. a private profile has been set up).
+PRIVATE_MANIFEST_REL = Path(".integrations") / "private" / "integrations.private.yaml"
+PRIVATE_LOCK_REL = Path(".integrations") / "private" / "integrations.private.lock.json"
 
 VALID_SOURCES = ("git", "local", "submodule")
 

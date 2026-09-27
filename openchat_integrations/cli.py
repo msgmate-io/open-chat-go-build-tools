@@ -81,6 +81,7 @@ def cmd_setup(args) -> int:
         profile,
         force=getattr(args, "force_setup", False) or getattr(args, "force", False),
         update=getattr(args, "update", False),
+        only_repo=getattr(args, "repo", None),
         log=log,
     )
     return 0
@@ -128,14 +129,20 @@ def cmd_sync(args) -> int:
     log(f"sync: wrote {lock_path.relative_to(manifest.repo_root)}")
 
     if private_entries:
-        if not private_lock_path.parent.exists():
+        canonical = setup.canonical_lock_path(manifest.repo_root)
+        target = canonical or private_lock_path
+        if not target.parent.exists():
             raise SetupError(
-                "private integrations are selected but the private ci checkout "
-                f"is missing at {private_lock_path.parent}; run `setup --profile "
-                f"{profile}` first"
+                "private integrations are selected but no private checkout is "
+                f"available at {target.parent}; run `setup --profile {profile}` first"
             )
-        Lockfile(version=lock.version, integrations=private_entries).save(private_lock_path)
-        log(f"sync: wrote {private_lock_path.relative_to(manifest.repo_root)}")
+        Lockfile(version=lock.version, integrations=private_entries).save(target)
+        log(f"sync: wrote {target.relative_to(manifest.repo_root)}")
+        # Keep the gitignored mirror in sync with the canonical private lock.
+        if canonical is not None:
+            Lockfile(version=lock.version, integrations=private_entries).save(
+                private_lock_path
+            )
     return 0
 
 
@@ -282,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(p)
     p.add_argument("--update", action="store_true", help="update existing checkouts to ref")
     p.add_argument("--force-setup", action="store_true", help="re-run even if the marker matches")
+    p.add_argument("--repo", help="materialize a single setup repo by id (e.g. llm_coding_agents)")
     p.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
 
     p = sub.add_parser("resolve", help="generate go.work, imports_gen.go and the effective plan")

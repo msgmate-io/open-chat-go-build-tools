@@ -1,17 +1,21 @@
 """Profile setup: materialize profile-scoped repositories and links.
 
 The integration manager keeps the public repository free of private source.
-Repositories that are only needed for a given profile (e.g. the private CI,
-Helm, mobile and LLM-context checkouts) are declared in the public
-``profile_setup.yaml`` and materialized on demand by::
+Repositories that are only needed for a given profile (the private CI tooling,
+Helm chart, mobile client, ...) are declared in the public ``profile_setup.yaml``
+and materialized on demand by::
 
     openchat-integrations setup --profile full
 
 Every other command runs this step automatically when the profile's setup
 marker is missing or stale, so a build never runs against a half-configured
-workspace. The public spec only ever names repository *locations*; all private
-source (the private integrations manifest and its lockfile) lives inside the
-``ci`` checkout.
+workspace.
+
+The private integrations manifest and its lockfile live in the private ``ci``
+repository. Profiles that only need those two files (``default``, ``full``,
+``full-android``) fetch them with a sparse checkout of ``openchat/`` and mirror
+them into ``.integrations/private/``; the ``full-ci`` profile additionally
+materializes the complete ``ci`` tooling and the Helm chart.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +33,6 @@ from .manifest import (
     MANIFEST_NAME,
     PRIVATE_LOCK_REL,
     PRIVATE_MANIFEST_REL,
-    ManifestError,
     _ensure_yaml,
 )
 
@@ -36,9 +40,19 @@ yaml = _ensure_yaml()
 
 SETUP_SPEC_NAME = "profile_setup.yaml"
 SETUP_DIR_REL = Path(".integrations") / ".setup"
-SETUP_MARKER_VERSION = 1
+SETUP_MARKER_VERSION = 2
 
-VALID_PROFILE_KEYS = ("repos", "symlinks")
+# Mirrored private manifest/lock, copied out of a ci checkout (full or sparse)
+# so the manager can read them from one stable, gitignored location.
+FRAGMENT_DIR_REL = Path(".integrations") / "private"
+FRAGMENT_MANIFEST_NAME = "integrations.private.yaml"
+FRAGMENT_LOCK_NAME = "integrations.private.lock.json"
+
+# Candidate locations of the `openchat/` fragment inside a ci checkout.
+FRAGMENT_SOURCE_RELS = (
+    Path("development") / "ci" / "openchat",
+    Path(".integrations") / "ci-fragment" / "openchat",
+)
 
 
 class SetupError(RuntimeError):
@@ -51,6 +65,8 @@ class SetupRepo:
     repo: str
     path: str
     ref: str = "main"
+    sparse: List[str] = field(default_factory=list)
+    fragment: bool = False
 
 
 @dataclass
@@ -96,6 +112,8 @@ class SetupSpec:
                 repo=repo,
                 path=repo_path,
                 ref=str(entry.get("ref", "main")).strip() or "main",
+                sparse=[str(s) for s in (entry.get("sparse") or [])],
+                fragment=bool(entry.get("fragment", False)),
             )
 
         profiles: Dict[str, ProfileSetup] = {}
@@ -155,6 +173,7 @@ def resolve_profile(repo_root: Path, requested: Optional[str]) -> str:
 
 
 def private_manifest_path(repo_root: Path) -> Path:
+    """Stable, gitignored location the manager reads the private fragment from."""
     return repo_root / PRIVATE_MANIFEST_REL
 
 
@@ -183,6 +202,13 @@ def _rev_parse(path: Path) -> str:
         return ""
 
 
+def _apply_sparse(path: Path, sparse: List[str]) -> None:
+    if not sparse:
+        return
+    _run_git(["sparse-checkout", "init", "--cone"], cwd=path)
+    _run_git(["sparse-checkout", "set", *sparse], cwd=path)
+
+
 def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
     path = Path(repo.path)
     if not path.is_absolute():
@@ -192,15 +218,21 @@ def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
             log(f"setup: fetch {repo.id} ({repo.path})")
             _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
             _run_git(["checkout", "--force", repo.ref], cwd=path)
+            _apply_sparse(path, repo.sparse)
         else:
             log(f"setup: using existing {repo.id} ({repo.path})")
         return _rev_parse(path)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     log(f"setup: cloning {repo.id} -> {repo.path}")
-    _run_git(["clone", "--filter=blob:none", "--no-checkout", repo.repo, str(path)])
-    _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
-    _run_git(["checkout", "--force", repo.ref], cwd=path)
+    if repo.sparse:
+        _run_git(["clone", "--filter=blob:none", "--no-checkout", repo.repo, str(path)])
+        _run_git(["checkout", "--force", repo.ref], cwd=path)
+        _apply_sparse(path, repo.sparse)
+    else:
+        _run_git(["clone", "--filter=blob:none", "--no-checkout", repo.repo, str(path)])
+        _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
+        _run_git(["checkout", "--force", repo.ref], cwd=path)
     return _rev_parse(path)
 
 
@@ -218,18 +250,64 @@ def _apply_link(repo_root: Path, link: SetupLink) -> None:
     os.symlink(link.target, link_path)
 
 
-def _digest(spec: SetupSpec, profile: str, repos: List[SetupRepo], extra: str) -> str:
+def _find_fragment_source(repo_root: Path) -> Optional[Path]:
+    for rel in FRAGMENT_SOURCE_RELS:
+        candidate = repo_root / rel
+        if (candidate / FRAGMENT_MANIFEST_NAME).exists():
+            return candidate
+    return None
+
+
+def _mirror_fragment(repo_root: Path, log) -> bool:
+    """Copy the private fragment/lock into `.integrations/private/` if present."""
+    source = _find_fragment_source(repo_root)
+    if source is None:
+        return False
+    dest = repo_root / FRAGMENT_DIR_REL
+    dest.mkdir(parents=True, exist_ok=True)
+    changed = False
+    for name in (FRAGMENT_MANIFEST_NAME, FRAGMENT_LOCK_NAME):
+        src = source / name
+        if not src.exists():
+            continue
+        dst = dest / name
+        content = src.read_bytes()
+        if not dst.exists() or dst.read_bytes() != content:
+            dst.write_bytes(content)
+            changed = True
+    log(f"setup: mirrored private fragment from {source.relative_to(repo_root)}")
+    return changed
+
+
+def _fragment_digest(repo_root: Path) -> str:
+    source = _find_fragment_source(repo_root)
+    if source is None:
+        return ""
+    manifest = source / FRAGMENT_MANIFEST_NAME
+    return hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else ""
+
+
+def _digest(
+    spec: SetupSpec, profile: str, repos: List[SetupRepo], fragment: str
+) -> str:
     profile_setup = spec.profile(profile)
     payload = {
         "version": SETUP_MARKER_VERSION,
         "profile": profile,
         "repos": [
-            {"id": r.id, "repo": r.repo, "path": r.path, "ref": r.ref} for r in repos
+            {
+                "id": r.id,
+                "repo": r.repo,
+                "path": r.path,
+                "ref": r.ref,
+                "sparse": r.sparse,
+            }
+            for r in repos
         ],
         "symlinks": [
             {"link": l.link, "target": l.target} for l in profile_setup.symlinks
         ],
-        "extra": extra,
+        "fragment": fragment,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True).encode("utf-8")
@@ -257,42 +335,42 @@ def ensure(
     *,
     force: bool = False,
     update: bool = False,
+    only_repo: Optional[str] = None,
     log=print,
 ) -> bool:
     """Materialize a profile's setup. Returns True when work was performed."""
     repo_root = repo_root.resolve()
     spec = SetupSpec.load(repo_root)
+
+    if only_repo:
+        if only_repo not in spec.repos:
+            raise SetupError(f"unknown setup repo {only_repo!r}")
+        resolved = _resolve_repo(repo_root, spec.repos[only_repo])
+        _ensure_repo(resolved, update=True, log=log)
+        return True
+
     repos = spec.repos_for(profile)
     profile_setup = spec.profile(profile)
-
-    # Hash the private fragment too: refreshing it must re-run setup.
-    fragment = private_manifest_path(repo_root)
-    extra = ""
-    if fragment.exists():
-        extra = hashlib.sha256(fragment.read_bytes()).hexdigest()
-
-    digest = _digest(spec, profile, repos, extra)
+    wants_fragment = any(r.fragment for r in repos)
+    fragment = _fragment_digest(repo_root) if wants_fragment else ""
+    digest = _digest(spec, profile, repos, fragment)
 
     if not force:
         marker = _read_marker(repo_root, profile)
         if marker and marker.get("digest") == digest:
             missing = [r for r in repos if not (repo_root / r.path).exists()]
             if not missing:
+                if wants_fragment:
+                    _mirror_fragment(repo_root, lambda _m: None)
                 return False
 
-    if not repos and not profile_setup.symlinks and not fragment.exists():
-        # Nothing to materialize for this profile.
+    if not repos and not profile_setup.symlinks and not wants_fragment:
         _write_marker(repo_root, profile, digest, [])
         return False
 
     recorded = []
     for repo in repos:
-        resolved = SetupRepo(
-            id=repo.id,
-            repo=repo.repo,
-            path=str((repo_root / repo.path).resolve()),
-            ref=repo.ref,
-        )
+        resolved = _resolve_repo(repo_root, repo)
         commit = _ensure_repo(resolved, update=update, log=log)
         recorded.append({"id": repo.id, "path": repo.path, "commit": commit})
 
@@ -300,9 +378,22 @@ def ensure(
         _apply_link(repo_root, link)
         log(f"setup: linked {link.link} -> {link.target}")
 
+    if wants_fragment:
+        _mirror_fragment(repo_root, log)
     _write_marker(repo_root, profile, digest, recorded)
     log(f"setup: profile={profile} ready")
     return True
+
+
+def _resolve_repo(repo_root: Path, repo: SetupRepo) -> SetupRepo:
+    return SetupRepo(
+        id=repo.id,
+        repo=repo.repo,
+        path=str((repo_root / repo.path).resolve()),
+        ref=repo.ref,
+        sparse=list(repo.sparse),
+        fragment=repo.fragment,
+    )
 
 
 def _write_marker(
@@ -317,3 +408,18 @@ def _write_marker(
         "repos": repos,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def canonical_lock_path(repo_root: Path) -> Optional[Path]:
+    """The private lockfile inside a full ci checkout, when present."""
+    source = repo_root / FRAGMENT_SOURCE_RELS[0]
+    if source.exists():
+        return source / FRAGMENT_LOCK_NAME
+    return None
+
+
+def canonical_manifest_path(repo_root: Path) -> Optional[Path]:
+    source = repo_root / FRAGMENT_SOURCE_RELS[0]
+    if source.exists():
+        return source / FRAGMENT_MANIFEST_NAME
+    return None
