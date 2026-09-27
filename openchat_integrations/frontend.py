@@ -48,12 +48,15 @@ def _ensure_frontend_workspace(frontend_root: Path, log) -> None:
 
 
 def link(manifest: Manifest, selected: List[str], log) -> int:
-    """Link integration-provided Vike frontend packages into the aggregator.
+    """Link integration-owned Vike frontend pages/packages into the aggregator.
 
-    Each integration may ship `frontend/` (with a `package.json` and a `pages/`
-    directory). The package is linked into `frontend/integrations/<id>` and its
-    pages into `frontend/pages/integrations/<name>` so Vike's filesystem routing
-    picks them up. No-op for integrations without a frontend package.
+    Integration pages live in the (possibly private) integration repositories
+    under `frontend/pages`. They are symlinked into
+    `frontend/pages/integrations/<name>` so Vike's filesystem routing picks
+    them up, but only for integrations present in the current profile. This
+    keeps per-integration React code out of the public frontend repository.
+    Integrations may additionally ship a full npm package under `frontend/`
+    (with `package.json`), which is linked into `frontend/integrations/<id>`.
     """
     frontend_root = manifest.repo_root / "frontend"
     if not frontend_root.exists():
@@ -62,24 +65,31 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
 
     integ_root = frontend_root / "integrations"
     pages_root = frontend_root / "pages" / "integrations"
-    linked = 0
+    packages_linked = 0
+    pages_linked = 0
     for integ_id in selected:
         integ = manifest.integrations[integ_id]
-        if integ.frontend is None or not integ.frontend.package:
+        if integ.frontend is None:
             continue
         src = manifest.path_for(integ) / integ.frontend.path
-        if not (src / "package.json").exists():
+        if not src.exists():
             continue
-        _replace_symlink(src, integ_root / integ_id)
+        if integ.frontend.package and (src / "package.json").exists():
+            _replace_symlink(src, integ_root / integ_id)
+            packages_linked += 1
         src_pages = src / "pages"
         if src_pages.exists():
             _replace_symlink(src_pages, pages_root / integ.frontend.name)
-        linked += 1
+            pages_linked += 1
 
-    if linked:
+    if packages_linked:
         _ensure_frontend_workspace(frontend_root, log)
-        log(f"frontend: linked {linked} integration frontend packages")
-    return linked
+    if packages_linked or pages_linked:
+        log(
+            f"frontend: linked {pages_linked} page set(s) "
+            f"and {packages_linked} package(s)"
+        )
+    return pages_linked + packages_linked
 
 
 def _pages_from_integration_json(path: Path) -> List[FrontendPage]:
