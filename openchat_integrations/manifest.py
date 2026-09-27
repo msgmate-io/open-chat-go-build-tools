@@ -77,6 +77,7 @@ class Frontend:
     package: Optional[str] = None
     path: str = "frontend"
     pages: List[FrontendPage] = field(default_factory=list)
+    extension: Optional[str] = None
 
 
 @dataclass
@@ -257,6 +258,7 @@ def _parse_frontend(raw: Any, integ_id: str) -> Optional[Frontend]:
         package=str(raw["package"]) if raw.get("package") else None,
         path=str(raw.get("path", "frontend")),
         pages=pages,
+        extension=str(raw["extension"]) if raw.get("extension") else None,
     )
 
 

@@ -77,6 +77,7 @@ def effective_frontend(manifest: Manifest, integ: Integration) -> Optional[Front
             package=raw.get("package") or package,
             path=str(raw.get("path", path)),
             pages=_pages_from_integration_json(json_path),
+            extension=str(raw.get("extension", "") or (default.extension if default else "") or ""),
         )
     return integ.frontend
 
@@ -101,6 +102,7 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
     pages_root = frontend_root / "pages" / "integrations"
     packages_linked = 0
     pages_linked = 0
+    linked_extensions: List[str] = []
     for integ_id in selected:
         integ = manifest.integrations[integ_id]
         front = effective_frontend(manifest, integ)
@@ -117,6 +119,14 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
             _replace_symlink(src_pages, pages_root / front.name)
             pages_linked += 1
             _anchor_node_modules(src, frontend_root)
+            extension = (front.extension or "").strip()
+            if extension:
+                linked_extensions.append(
+                    f'import "../pages/integrations/{front.name}/{extension}";'
+                )
+
+    if linked_extensions:
+        write_extensions_entry(frontend_root, linked_extensions)
 
     if packages_linked:
         _ensure_frontend_workspace(frontend_root, log)
@@ -126,6 +136,22 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
             f"and {packages_linked} package(s)"
         )
     return pages_linked + packages_linked
+
+
+EXTENSIONS_ENTRY_REL = Path("integrations") / "extensions.gen.ts"
+
+
+def write_extensions_entry(frontend_root: Path, imports: List[str]) -> None:
+    """(Re)generate the aggregator side of integration frontend registrations.
+
+    The public app imports this module at startup (LayoutDefault). It is
+    committed as an empty baseline; private integrations only add their import
+    when linked (see `integration.frontend.json` -> `extension`).
+    """
+    entry = frontend_root / EXTENSIONS_ENTRY_REL
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(imports) + "\n" if imports else ""
+    entry.write_text(body, encoding="utf-8")
 
 
 def _anchor_node_modules(src: Path, frontend_root: Path) -> None:
