@@ -11,7 +11,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .manifest import FrontendPage, Integration, Manifest
 
@@ -47,6 +47,40 @@ def _ensure_frontend_workspace(frontend_root: Path, log) -> None:
     log("frontend: added integrations/* to npm workspaces")
 
 
+FRONTEND_JSON_NAME = "integration.frontend.json"
+
+
+def _load_frontend_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def effective_frontend(manifest: Manifest, integ: Integration) -> Optional[Frontend]:
+    """Resolve the frontend contribution of an integration.
+
+    An integration owns its frontend contribution: if the integration checkout
+    provides `integration.frontend.json`, it fully describes the page set
+    (name defaults to the integration id when no manifest entry exists). The
+    manifest `frontend` entry only matters for the publish-name/link target
+    and a bundled npm `package`, neither of which the JSON needs.
+    """
+    json_path = manifest.path_for(integ) / FRONTEND_JSON_NAME
+    if json_path.exists():
+        from .manifest import Frontend as _Frontend
+
+        raw = _load_frontend_json(json_path)
+        default = integ.frontend
+        name = default.name if default else integ.id
+        package = default.package if default else None
+        path = default.path if default else "frontend"
+        return _Frontend(
+            name=str(raw.get("name", name)),
+            package=raw.get("package") or package,
+            path=str(raw.get("path", path)),
+            pages=_pages_from_integration_json(json_path),
+        )
+    return integ.frontend
+
+
 def link(manifest: Manifest, selected: List[str], log) -> int:
     """Link integration-owned Vike frontend pages/packages into the aggregator.
 
@@ -69,17 +103,18 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
     pages_linked = 0
     for integ_id in selected:
         integ = manifest.integrations[integ_id]
-        if integ.frontend is None:
+        front = effective_frontend(manifest, integ)
+        if front is None:
             continue
-        src = manifest.path_for(integ) / integ.frontend.path
+        src = manifest.path_for(integ) / front.path
         if not src.exists():
             continue
-        if integ.frontend.package and (src / "package.json").exists():
+        if front.package and (src / "package.json").exists():
             _replace_symlink(src, integ_root / integ_id)
             packages_linked += 1
         src_pages = src / "pages"
         if src_pages.exists():
-            _replace_symlink(src_pages, pages_root / integ.frontend.name)
+            _replace_symlink(src_pages, pages_root / front.name)
             pages_linked += 1
 
     if packages_linked:
@@ -112,12 +147,10 @@ def _pages_from_integration_json(path: Path) -> List[FrontendPage]:
 
 
 def pages_for(manifest: Manifest, integ: Integration) -> List[FrontendPage]:
-    if integ.frontend is None:
+    front = effective_frontend(manifest, integ)
+    if front is None:
         return []
-    override = manifest.path_for(integ) / "integration.frontend.json"
-    if override.exists():
-        return _pages_from_integration_json(override)
-    return integ.frontend.pages
+    return front.pages
 
 
 def export_pages(
