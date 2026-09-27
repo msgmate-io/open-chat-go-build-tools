@@ -224,6 +224,15 @@ def _apply_sparse(path: Path, sparse: List[str]) -> None:
         pass
 
 
+def _prefer_remote_ref(path: Path, ref: str) -> str:
+    """Use origin/<ref> when it exists, so a stale local branch is not reused."""
+    try:
+        _run_git(["rev-parse", "--verify", f"refs/remotes/origin/{ref}"], cwd=path)
+        return f"origin/{ref}"
+    except SetupError:
+        return ref
+
+
 def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
     path = Path(repo.path)
     if not path.is_absolute():
@@ -232,7 +241,8 @@ def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
         if update:
             log(f"setup: fetch {repo.id} ({repo.path})")
             _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
-            _run_git(["checkout", "--force", repo.ref], cwd=path)
+            target = _prefer_remote_ref(path, repo.ref)
+            _run_git(["checkout", "--force", target], cwd=path)
         else:
             log(f"setup: using existing {repo.id} ({repo.path})")
         _apply_sparse(path, repo.sparse)
@@ -242,12 +252,12 @@ def _ensure_repo(repo: SetupRepo, *, update: bool, log) -> str:
     log(f"setup: cloning {repo.id} -> {repo.path}")
     if repo.sparse:
         _run_git(["clone", "--filter=blob:none", "--no-checkout", repo.repo, str(path)])
-        _run_git(["checkout", "--force", repo.ref], cwd=path)
+        _run_git(["checkout", "--force", _prefer_remote_ref(path, repo.ref)], cwd=path)
         _apply_sparse(path, repo.sparse)
     else:
         _run_git(["clone", "--filter=blob:none", "--no-checkout", repo.repo, str(path)])
         _run_git(["fetch", "--tags", "--force", "origin"], cwd=path)
-        _run_git(["checkout", "--force", repo.ref], cwd=path)
+        _run_git(["checkout", "--force", _prefer_remote_ref(path, repo.ref)], cwd=path)
     return _rev_parse(path)
 
 
