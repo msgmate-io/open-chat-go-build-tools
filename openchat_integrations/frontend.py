@@ -106,25 +106,39 @@ def _prune_integration_links(frontend_root: Path, manifest: Manifest) -> None:
             target = (link.parent / os.readlink(link)).resolve()
         except OSError:
             return False
+        # Integration checkouts always live under clients/integrations, so any
+        # link pointing there is manager-owned even when the current profile
+        # (e.g. core-only, which has no private manifest) does not list the
+        # integration. This prevents stale private pages leaking into a build.
+        if "clients" in target.parts and "integrations" in target.parts:
+            return True
         return any(target == base or base in target.parents for base in bases)
 
-    candidates = []
-    pages_root = frontend_root / "pages"
-    if pages_root.exists():
-        candidates.extend(pages_root.iterdir())
-        integrations_pages = pages_root / "integrations"
-        if integrations_pages.exists():
-            candidates.extend(integrations_pages.iterdir())
-    integ_root = frontend_root / "integrations"
-    if integ_root.exists():
-        candidates.extend(integ_root.iterdir())
+    roots = [p for p in (frontend_root / "pages", frontend_root / "integrations") if p.exists()]
+    for root in roots:
+        for current, dirs, files in os.walk(root, followlinks=False):
+            for name in list(dirs):
+                candidate = Path(current) / name
+                if owned(candidate):
+                    candidate.unlink()
+                    dirs.remove(name)
+            for name in files:
+                candidate = Path(current) / name
+                if owned(candidate):
+                    candidate.unlink()
 
-    for candidate in candidates:
-        if owned(candidate):
-            if candidate.is_dir() and not candidate.is_symlink():
-                shutil.rmtree(candidate)
-            else:
-                candidate.unlink()
+    # Remove now-empty directories the manager created under the page prefixes.
+    for prefix in (frontend_root / "pages" / "integrations", frontend_root / "integrations"):
+        if not prefix.exists():
+            continue
+        for current, dirs, files in os.walk(prefix, topdown=False):
+            if Path(current) == prefix:
+                continue
+            try:
+                if not any(Path(current).iterdir()):
+                    Path(current).rmdir()
+            except OSError:
+                pass
 
 
 def link(manifest: Manifest, selected: List[str], log) -> int:
