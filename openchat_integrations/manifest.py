@@ -94,12 +94,28 @@ class FrontendPage:
 
 
 @dataclass
+class FrontendMount:
+    """Map a directory in the integration's frontend to an aggregator path.
+
+    `source` is relative to the integration's frontend directory (e.g. `pages`
+    or `pages/sign-up`); `dest` is relative to the aggregator's `frontend/pages`
+    (e.g. `integrations/<name>` or `sign-up`). The destination determines the
+    Vike route, so a mount can place pages at the default `/integrations/<name>`
+    prefix or at an arbitrary root route.
+    """
+
+    source: str
+    dest: str
+
+
+@dataclass
 class Frontend:
     name: str
     package: Optional[str] = None
     path: str = "frontend"
     pages: List[FrontendPage] = field(default_factory=list)
     extension: Optional[str] = None
+    mounts: List[FrontendMount] = field(default_factory=list)
 
 
 @dataclass
@@ -305,7 +321,21 @@ def _parse_frontend(raw: Any, integ_id: str) -> Optional[Frontend]:
         path=str(raw.get("path", "frontend")),
         pages=pages,
         extension=str(raw["extension"]) if raw.get("extension") else None,
+        mounts=_parse_frontend_mounts(integ_id, raw.get("mounts")),
     )
+
+
+def _parse_frontend_mounts(integ_id: str, raw: Any) -> List[FrontendMount]:
+    mounts: List[FrontendMount] = []
+    for mount in raw or []:
+        if not isinstance(mount, dict):
+            raise ManifestError(f"integration {integ_id!r} frontend mount must be a mapping")
+        source = str(mount.get("source", "")).strip()
+        dest = str(mount.get("dest", "")).strip()
+        if not source:
+            raise ManifestError(f"integration {integ_id!r} frontend mount needs source")
+        mounts.append(FrontendMount(source=source, dest=dest))
+    return mounts
 
 
 def _parse_integration(integ_id: str, entry: Dict[str, Any]) -> Integration:

@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 
-from .manifest import FrontendPage, Integration, Manifest
+from .manifest import Frontend, FrontendMount, FrontendPage, Integration, Manifest
 
 
 class ExportError(RuntimeError):
@@ -78,8 +78,53 @@ def effective_frontend(manifest: Manifest, integ: Integration) -> Optional[Front
             path=str(raw.get("path", path)),
             pages=_pages_from_integration_json(json_path),
             extension=str(raw.get("extension", "") or (default.extension if default else "") or ""),
+            mounts=_mounts_from_integration_json(json_path),
         )
     return integ.frontend
+
+
+def _prune_integration_links(frontend_root: Path, manifest: Manifest) -> None:
+    """Remove manager-owned symlinks that point into integration checkouts.
+
+    Mounts can move pages to arbitrary (root) routes, so stale links from a
+    previously selected profile must be removed before re-linking — otherwise a
+    core-only build would still contain a private page.
+    """
+    bases = []
+    for integ in manifest.integrations.values():
+        try:
+            bases.append(manifest.path_for(integ).resolve())
+        except OSError:
+            continue
+    if not bases:
+        return
+
+    def owned(link: Path) -> bool:
+        if not link.is_symlink():
+            return False
+        try:
+            target = (link.parent / os.readlink(link)).resolve()
+        except OSError:
+            return False
+        return any(target == base or base in target.parents for base in bases)
+
+    candidates = []
+    pages_root = frontend_root / "pages"
+    if pages_root.exists():
+        candidates.extend(pages_root.iterdir())
+        integrations_pages = pages_root / "integrations"
+        if integrations_pages.exists():
+            candidates.extend(integrations_pages.iterdir())
+    integ_root = frontend_root / "integrations"
+    if integ_root.exists():
+        candidates.extend(integ_root.iterdir())
+
+    for candidate in candidates:
+        if owned(candidate):
+            if candidate.is_dir() and not candidate.is_symlink():
+                shutil.rmtree(candidate)
+            else:
+                candidate.unlink()
 
 
 def link(manifest: Manifest, selected: List[str], log) -> int:
@@ -99,7 +144,7 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
         return 0
 
     integ_root = frontend_root / "integrations"
-    pages_root = frontend_root / "pages" / "integrations"
+    _prune_integration_links(frontend_root, manifest)
     packages_linked = 0
     pages_linked = 0
     linked_extensions: List[str] = []
@@ -114,10 +159,21 @@ def link(manifest: Manifest, selected: List[str], log) -> int:
         if front.package and (src / "package.json").exists():
             _replace_symlink(src, integ_root / integ_id)
             packages_linked += 1
-        src_pages = src / "pages"
-        if src_pages.exists():
-            _replace_symlink(src_pages, pages_root / front.name)
+        # Link the integration's page mounts. Without an explicit `mounts` list
+        # the whole `pages/` directory mounts under the default
+        # `/integrations/<name>` route prefix; explicit mounts can place pages at
+        # arbitrary (root) routes (e.g. `/sign-up`).
+        mounts = front.mounts or [_default_mount(front)]
+        linked_any = False
+        for mount in mounts:
+            src_dir = src / mount.source if mount.source else src
+            if not src_dir.exists():
+                continue
+            dest = Path("pages") / mount.dest if mount.dest else Path("pages")
+            _replace_symlink(src_dir, frontend_root / dest)
             pages_linked += 1
+            linked_any = True
+        if linked_any:
             _anchor_node_modules(src, frontend_root)
             extension = (front.extension or "").strip()
             if extension:
@@ -176,6 +232,24 @@ def _anchor_node_modules(src: Path, frontend_root: Path) -> None:
         node_modules.symlink_to(rel)
     except OSError:
         log(f"warning: could not create node_modules anchor at {src}")
+
+
+def _default_mount(front: Frontend) -> FrontendMount:
+    return FrontendMount(source="pages", dest=f"integrations/{front.name}")
+
+
+def _mounts_from_integration_json(path: Path) -> List[FrontendMount]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    mounts: List[FrontendMount] = []
+    for mount in raw.get("mounts") or []:
+        if not isinstance(mount, dict):
+            raise ExportError(f"{path}: mount must be a mapping")
+        source = str(mount.get("source", "")).strip()
+        dest = str(mount.get("dest", "")).strip()
+        if not source:
+            raise ExportError(f"{path}: mount needs a source")
+        mounts.append(FrontendMount(source=source, dest=dest))
+    return mounts
 
 
 def _pages_from_integration_json(path: Path) -> List[FrontendPage]:
