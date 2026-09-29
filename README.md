@@ -85,9 +85,21 @@ Select a profile with `INTEGRATION_PROFILE`, `--profile`, or the manifest's
   `backend/integrations/externalintegrations/imports_gen.go` and the build tags.
 - `dev` writes a local override to the gitignored `integrations.local.yaml`;
   `OPENCHAT_INTEGRATION_<ID>_PATH=/path/to/checkout` also works.
-- Private integrations (`private: true`) require authenticated git access;
-  configure a token credential with
-  `git config url."https://x-access-token:$TOKEN@github.com/".insteadOf "https://github.com/"`.
+- Private integrations (`private: true`) require authenticated git access. The
+  manager configures git from the credentials it can find, so a developer whose
+  system git client is already authenticated usually needs no extra setup:
+  - `GITHUB_TOKEN` / `GH_TOKEN` in the environment (highest priority),
+  - a GitHub token in the host's `gh` config
+    (`~/.config/gh/hosts.yml`),
+  - a GitHub token in `~/.git-credentials`,
+  - a forwarded SSH agent (`SSH_AUTH_SOCK`).
+  The dev compose mounts the host home read-only at `/host-home` and forwards
+  the SSH agent into the `integration-sync` container for exactly this purpose
+  (`OPENCHAT_HOST_HOME`). Users whose `gh` token lives in the OS keyring should
+  put it in `.env`, e.g. `echo "GITHUB_TOKEN=$(gh auth token)" >> .env`.
+  When running on the host the manager never rewrites the developer's
+  `~/.gitconfig`; the discovery only injects the rewrite into the git
+  subprocesses it spawns.
 
 ## License
 

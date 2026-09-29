@@ -6,7 +6,7 @@
 # vendored as the `development/build-tools` submodule.
 FROM python:3.12-alpine
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git openssh-client
 COPY development/build-tools /build-tools
 RUN pip install --no-cache-dir /build-tools
 

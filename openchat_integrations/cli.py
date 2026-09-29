@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from . import frontend, gowork, setup, sources
+from . import credentials, frontend, gowork, setup, sources
 from .manifest import Manifest, ManifestError, MANIFEST_NAME, LOCAL_OVERLAY_NAME
 from .sources import Lockfile, SourceError, load_lockfiles
 from .setup import SetupError
@@ -321,6 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    credentials.configure(log)
     handlers = {
         "setup": cmd_setup,
         "sync": cmd_sync,
