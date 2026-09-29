@@ -27,7 +27,10 @@ def _replace_symlink(target: Path, link: Path) -> None:
         else:
             link.unlink()
     link.parent.mkdir(parents=True, exist_ok=True)
-    os.symlink(target, link)
+    # Relative links stay valid wherever the repo is mounted: the manager may
+    # run in the integration-sync container while Vite resolves the pages in
+    # the frontend container, where the absolute repo root differs.
+    os.symlink(os.path.relpath(target, start=link.parent), link)
 
 
 def _ensure_frontend_workspace(frontend_root: Path, log) -> None:
